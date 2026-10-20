@@ -1,0 +1,314 @@
+#include <WiFi.h>
+#include <time.h>
+#include <ESP32Servo.h>
+#include "sntp.h"
+
+#define D1  1
+#define D2  2
+#define D3  3
+#define D4  4
+#define D5  5
+#define D12 12
+#define D13 13
+#define D14 14
+#define D15 15
+#define D16 16
+#define D17 17
+#define D19 19
+#define D21 21
+#define D22 22
+#define D23 23
+#define D25 25
+#define D26 26
+
+// Replace with your Wi-Fi credentials
+const char* ssid = "Danush_2.4G";
+const char* password = "dan2thi1985";
+
+// Saskatoon: UTC−6 with no DST
+const long gmtOffset_sec = -6 * 3600;
+const int daylightOffset_sec = 0;
+
+// Off-Peak time window
+int window_start_hour = 22;
+int window_start_minute = 5;
+int window_end_hour = 7;
+
+// Max deep sleep time in seconds (71 mins)
+// #define MAX_SLEEP_SECONDS 10800
+#define MAX_SLEEP_SECONDS 4  // testing
+
+const int servoPin = D4;
+const int waterPumpPin = D14;
+const int solenoidPin = D13;
+const int kettleWaterSensorPin = D25;
+const int glassTankWaterSensorPin = D26;
+
+unsigned long solenoidOnStart = 0;
+// unsigned long solenoidTimeout = 45; //5; // seconds (i.e. conservative time period which the solenoid should be on)
+unsigned long solenoidTimeout = 5; // testing
+bool solenoidState = false;
+
+unsigned long pumpOnStart = 0;
+// unsigned long pumpTimeout = 120; //5; // seconds (i.e. conservative time period which the pump should be on)
+unsigned long pumpTimeout = 5; // testing
+bool pumpState = false;
+
+// const unsigned long coolDownTimePeriod = 3 * 60 * 60;  //10; // seconds (i.e. this could be 2/3 hours in real world case)
+const unsigned long coolDownTimePeriod = 5; // testing
+
+// const int waterBoilingTimePeriod = 500; //5; // seconds (i.e. this could be 8-9 minutes)
+const int waterBoilingTimePeriod = 3; // testing
+
+
+const int maxCyclesPerWindow = 3; // how many cycles per one time window
+RTC_DATA_ATTR int cycleCounter = 0;
+RTC_DATA_ATTR bool startTransferringWater = false;
+
+Servo myServo;
+
+void transferWaterToTank() {
+  delay(2000);
+  Serial.println("Water transfer started.");
+  unsigned long currentTime = 0;
+  pumpOnStart = 0;
+  while(currentTime - pumpOnStart < pumpTimeout * 1000) {
+    Serial.println(currentTime);
+    int waterDetected = digitalRead(glassTankWaterSensorPin);
+    if (waterDetected == LOW) {// if water detected
+      digitalWrite(waterPumpPin, LOW); // switch off water pump
+      Serial.println("water detected on glass tank.");
+      break;
+    } else {
+      Serial.println("No water detected on glass tank.");
+      if (!pumpState) {
+		  // Water pump is OFF: turn it ON and start timer
+        digitalWrite(waterPumpPin, HIGH);
+        pumpState = true;
+        pumpOnStart = millis();
+        Serial.println("No water - WATER PUMP - ON");
+      }
+    }
+    delay(1000);
+    currentTime = millis();
+  }
+  Serial.println("Switching off water pump.");
+  delay(1000);
+  digitalWrite(waterPumpPin, LOW); // switch off water pump after time out or because water detectedd
+  pumpState = false;
+  Serial.println("Water transfer completed.");
+}
+
+void boilWater() {
+
+  //TODO:only switch on if the kettle sensor detects water
+  Serial.println("Switching on the kettle, water is boiling...");
+  delay(1000);
+  myServo.write(170);
+  delay(1000);
+  myServo.write(70);
+  delay(waterBoilingTimePeriod * 1000);
+  // int waterBoilingTimePeriod_ms = waterBoilingTimePeriod * 1000;
+  // const int chunk = 800; // ms
+  // for (int elapsed = 0; elapsed < waterBoilingTimePeriod_ms; elapsed += chunk) {
+  //   delay(chunk);
+  //   yield();              // let the RTOS & Wi‑Fi stack run
+  // }
+  myServo.write(0);
+  Serial.println("Water boiled, switched off kettle.");
+  startTransferringWater = true;
+  Serial.printf("Entering deep sleep for %d seconds until water cools down.\n", coolDownTimePeriod);
+  esp_sleep_enable_timer_wakeup(coolDownTimePeriod * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+void fillWater() {
+  delay(1000);
+  Serial.println("Water filling started.");
+  // Your solenoid valve logic here
+	unsigned long currentTime = 0;
+  solenoidOnStart = 0;
+  while(currentTime - solenoidOnStart < solenoidTimeout * 1000) {
+    Serial.println(currentTime);
+    int waterDetected = digitalRead(kettleWaterSensorPin);
+    if (waterDetected == LOW) {// if water detected
+      digitalWrite(solenoidPin, LOW); // switch off solenoid
+      Serial.println("water detected");
+      break;
+    } else {
+      Serial.println("no water");
+      if (!solenoidState) {
+		  // Solenoid is OFF: turn it ON and start timer
+        digitalWrite(solenoidPin, HIGH);
+        solenoidState = true;
+        solenoidOnStart = millis();
+        Serial.println("No water - SOLENOID - ON");
+      }
+    }
+    delay(1000);
+    currentTime = millis();
+  }
+  Serial.println("Switching off solenoid.");
+  digitalWrite(solenoidPin, LOW); // switch off solenoid after time out
+  solenoidState = false;
+  Serial.println("Water filling stopped.");
+  delay(2000);
+  Serial.println("Water filling is complete.");
+}
+
+void glassContainerFull(){
+   Serial.println("Glass container already full, skipping cycle.");
+   Serial.printf("Sleeping for %d seconds.\n", MAX_SLEEP_SECONDS);
+   esp_sleep_enable_timer_wakeup(MAX_SLEEP_SECONDS * 1000000ULL);
+   esp_deep_sleep_start();
+}
+
+
+void setup() {
+  Serial.begin(115200);
+  delay(200); // Wait for serial connection
+  pinMode(kettleWaterSensorPin, INPUT);
+  pinMode(glassTankWaterSensorPin, INPUT);
+  pinMode(solenoidPin, OUTPUT);
+  pinMode(waterPumpPin, OUTPUT);
+  digitalWrite(solenoidPin, LOW); // Solenoid OFF initially
+  myServo.attach(servoPin);  // Use D4 = GPIO2, safe for servos
+  delay(250);
+  myServo.write(20);
+  delay(250);
+  if (startTransferringWater) {
+    Serial.println("Woke up from deep sleep");
+    transferWaterToTank();
+    delay(1000);
+    startTransferringWater = false;
+     Serial.println("Cycle completed");
+     delay(2000);
+  }
+  // Connect to Wi-Fi
+  delay(1000);
+  WiFi.mode(WIFI_STA);
+  delay(1000);
+  WiFi.begin(ssid, password);
+  delay(1000);
+  int timeout = 0;
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED && timeout < 20) { // 20 * 500ms = 10 seconds timeout
+    delay(500);
+    Serial.print(".");
+    timeout++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+  Serial.println("\nConnected.");
+} else {
+  Serial.println("\nConnection failed. Resetting...");
+  //ESP.restart();
+  esp_sleep_enable_timer_wakeup(2 * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
+  // Set time via NTP
+  configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.nist.gov");
+  delay(7000);
+  Serial.print("Waiting for NTP time...");
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("❌ Failed to get time via NTP.");
+  } else {
+    Serial.printf("✅ Time synced: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  }
+
+  time_t now = time(nullptr);
+  struct tm* current = localtime(&now);
+  int hour = current->tm_hour;
+  int minute = current->tm_min;
+  int wday = current->tm_wday;  // 0 = Sunday, 6 = Saturday
+
+  Serial.printf("Current time: %02d:%02d:%02d\n", hour, minute, current->tm_sec);
+
+  bool isWeekend = (wday == 0 || wday == 6);
+
+  const char* printMsg;	
+  // Check if current time is between 22:05 (10:05 PM) and 05:00 AM
+  bool inWindow = false;
+  if (isWeekend){
+	  inWindow = true;
+	  printMsg = "It is weekend";
+  } else if ((hour > window_start_hour) || (hour == window_start_hour && minute >= window_start_minute) || (hour < window_end_hour)) {
+    inWindow = true;
+	printMsg = "It is off-peak time";  
+  }
+  //  if ((hour > window_start_hour) && (hour < window_end_hour)) {
+  //   inWindow = true;
+  // }
+
+  if (inWindow) {
+     Serial.println(printMsg);
+      if (cycleCounter >= maxCyclesPerWindow) {
+        Serial.println("Max cycles reached for this time window. Sleeping until next window.");
+        // Calculate time until next 10:05 PM like in your existing else block
+        struct tm target = *current;
+        target.tm_hour = window_start_hour;
+        target.tm_min = window_start_minute;
+        target.tm_sec = 0;
+
+        if (mktime(&target) < now) {
+            target.tm_mday += 1;
+            Serial.println("Next window is tomorrow.");
+            Serial.println(target.tm_mday);
+        }
+        Serial.println(target.tm_mday);
+
+        int secondsUntilTarget = difftime(mktime(&target), now);
+        int sleepSec = min(secondsUntilTarget, MAX_SLEEP_SECONDS);
+        Serial.printf("Sleeping for %d seconds until next window.\n", sleepSec);
+        esp_sleep_enable_timer_wakeup(sleepSec * 1000000ULL);
+        esp_deep_sleep_start();
+    }
+    int waterDetected = digitalRead(glassTankWaterSensorPin);
+    delay(1000);
+    if (waterDetected == HIGH) {  // if water not detected in glassTank     
+      transferWaterToTank();
+      delay(1000);
+      waterDetected =  digitalRead(glassTankWaterSensorPin);
+      delay(100);
+      if (waterDetected == HIGH) { // if water not detected in glassTank
+        cycleCounter++; // Increment for each attempted cycle
+        Serial.printf("Cycle started. cycleCounter = %d \n", cycleCounter);
+        fillWater();
+        delay(1000);
+        boilWater();
+      } else {
+        glassContainerFull();
+      }
+    } else {  // water detected
+        glassContainerFull();
+    }
+  } else {
+    // ❌ Not yet in the Off-Peak time window
+    cycleCounter = 0;
+    Serial.println("Outside of Off-Peak time window. Counter reset.");
+    struct tm target = *current;
+    target.tm_hour = window_start_hour;
+    target.tm_min = window_start_minute;
+    target.tm_sec = 0;
+
+    // If after 10:05 PM but not in window (i.e., between 5:00 AM and 10:05 PM), go to tonight
+    if (mktime(&target) < now) {
+      target.tm_mday += 1; // Move to next day
+    }
+
+    int secondsUntilTarget = difftime(mktime(&target), now);
+    int sleepSec = min(secondsUntilTarget, MAX_SLEEP_SECONDS);
+    Serial.printf("Not in window. Sleeping for %d seconds until 10:05 PM.\n", sleepSec);
+    esp_sleep_enable_timer_wakeup(sleepSec * 1000000ULL);
+    esp_deep_sleep_start();
+  }
+}
+
+void loop() {
+  // Not used; ESP32 restarts after each deep sleep
+}
+
+
+
+
