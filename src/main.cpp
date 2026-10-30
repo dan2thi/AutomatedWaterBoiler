@@ -23,7 +23,7 @@ const int kettleWaterSensorPin = D25;
 const int glassTankWaterSensorPin = D26;
 
 // Preserve existing short test durations. Restore production values later.
-constexpr uint32_t pumpTimeout = 120;
+constexpr uint32_t pumpTimeout = 135;
 constexpr uint32_t solenoidTimeout = 60;
 constexpr uint32_t waterBoilingTimePeriod = 500;
 // constexpr uint32_t coolDownTimePeriod = 10800;  // Home Assistant uses 3 hours
@@ -118,12 +118,23 @@ void transferWaterToTank() {
     mqttDelay(1000);
     return;
   }
-  if (digitalRead(glassTankWaterSensorPin) == LOW) return;
+  if (digitalRead(glassTankWaterSensorPin) == LOW) 
+  {
+    Serial.println("Glass tank is already full");
+    return;
+  }
   unsigned long start = millis();
   digitalWrite(waterPumpPin, HIGH);
   mqttDelay(250);
   while (millis() - start < pumpTimeout * 1000UL) {
-    if (emergencyShutdownTriggered || digitalRead(glassTankWaterSensorPin) == LOW) break;
+    if (emergencyShutdownTriggered){
+      Serial.println("Emergency shutdown triggered during transfer");
+      break;
+    }
+    if (digitalRead(glassTankWaterSensorPin) == LOW) {
+      Serial.println("Glass tank is now full");
+      break;
+    }
     mqttDelay(100);
   }
   digitalWrite(waterPumpPin, LOW);
@@ -140,8 +151,8 @@ void fillWater() {
     return;
   }
   Serial.println("Filling kettle");
+  mqttDelay(250);
   if (digitalRead(kettleWaterSensorPin) == LOW) {
-    mqttDelay(250);
     Serial.println("Kettle is already full");
     mqttDelay(250);
     return;
@@ -150,19 +161,19 @@ void fillWater() {
   digitalWrite(solenoidPin, HIGH);
   mqttDelay(250);
   while (millis() - start < solenoidTimeout * 1000UL) {
-    if (emergencyShutdownTriggered || digitalRead(kettleWaterSensorPin) == LOW) break;
-    mqttDelay(100);
+    if (emergencyShutdownTriggered){
+      Serial.println("Emergency shutdown triggered during water filling");
+      break;
+    }
+    if (digitalRead(kettleWaterSensorPin) == LOW) {
+      Serial.println("Kettle is now full");
+      break;
+    }
+    mqttDelay(250);
   }
   digitalWrite(solenoidPin, LOW);
   mqttDelay(250);
   Serial.println("Water filling complete");
-
-
- // bool kettleFilled = !emergencyShutdownTriggered && digitalRead(kettleWaterSensorPin) == LOW;
-  //Serial.printf("Kettle filled: %s\n", kettleFilled ? "true" : "false");
-
-  // return kettleFilled;
-  // return !emergencyShutdownTriggered && digitalRead(kettleWaterSensorPin) == LOW;
 }
 
 void boilWaterWithoutSleep() {
@@ -188,8 +199,9 @@ void boilWaterWithoutSleep() {
 
 void runWaterBoiler() {
   String decision = requestHA("wake");
+  delay(250);
   Serial.printf("Response for {wake} request: %s\n", decision.c_str());
-
+  delay(250);
   if (decision == "WAIT") {
     reportOperation(STATE_COOLING);
     sleepForSeconds(getRetryDuration());
@@ -197,19 +209,15 @@ void runWaterBoiler() {
   if (decision != "TRANSFER" &&
       decision != "READY" &&
       decision != "READY_SKIP_TRANSFER") {
-
     reportOperation(STATE_ERROR);
     sleepForSeconds(getRetryDuration());
   }
-
   // Skip transfer if HA confirms it was already completed
   if (decision == "READY_SKIP_TRANSFER") {
-
     Serial.println("Final transfer already completed. Skipping.");
-
   } else {
-
     transferWaterToTank();
+    delay(250);
   }
   if (decision == "TRANSFER") {
     decision = requestHA("transfer_done");
@@ -219,16 +227,21 @@ void runWaterBoiler() {
       sleepForSeconds(getRetryDuration());
     }
   }
-  if (ENABLE_ACTUATORS && digitalRead(glassTankWaterSensorPin) == LOW) {
+  bool glassTankFull = digitalRead(glassTankWaterSensorPin);
+  delay(250);
+  if (ENABLE_ACTUATORS && glassTankFull == LOW) {
+    delay(250);
     Serial.println("Glass tank is full");
     delay(250);
     reportOperation(STATE_TANK_FULL);
     delay(250);
     sleepForSeconds(getRetryDuration());
   }
-
+  delay(250);
   decision = requestHA("cycle");
+  delay(250);
   Serial.printf("Response for {cycle} request: %s\n", decision.c_str());
+  delay(250);
   if (decision != "APPROVED") {
     reportOperation(STATE_WAITING);
     sleepForSeconds(getRetryDuration());

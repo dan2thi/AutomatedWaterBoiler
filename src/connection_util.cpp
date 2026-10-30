@@ -79,6 +79,7 @@ void connectToWiFi() {
 }
 
 void connectMQTT() {
+  Serial.println("Connecting to MQTT broker...");
   delay(250);
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setBufferSize(1024);
@@ -92,6 +93,8 @@ void connectMQTT() {
     esp_sleep_enable_timer_wakeup(3 * 1000000ULL);
     esp_deep_sleep_start();
   }
+  Serial.println("MQTT connected");
+  Serial.println("Subscribing to MQTT topics...");
   if (!mqttClient.subscribe(authorizationTopic) || !mqttClient.subscribe(bedSideLeakTopic)) {
     Serial.println("MQTT subscription failed; sleeping for 3 seconds");
     esp_sleep_enable_timer_wakeup(3 * 1000000ULL);
