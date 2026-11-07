@@ -40,6 +40,12 @@ const char* getStateName(WaterSystemState state) {
     case STATE_ERROR: return "Error";
     case SHUTDOWN: return "Shutdown";
     case LEAK_DETECTED: return "Leak Detected";
+    case ERROR_WATER_FILLING: return "Error : Kettle is not filled with water";
+    case ERROR_UNIDENTIFIED_RESPONSE: return "Error : Unidentified response received from HA";
+    case ERROR_COOLING_CONFIRMATION_UNAVAILABLE: return "Error : Cooling confirmation unavailable";
+    case ERROR_INVALID_COOLING_DURATION: return "Error : Invalid cooling duration";
+    case ERROR_TIME_SYNC_FAILURE: return "Error : Time sychronization failure";
+    
     default: return "Error";
   }
 }

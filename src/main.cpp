@@ -23,8 +23,8 @@ const int kettleWaterSensorPin = D25;
 const int glassTankWaterSensorPin = D26;
 
 // Preserve existing short test durations. Restore production values later.
-constexpr uint32_t pumpTimeout = 135;
-constexpr uint32_t solenoidTimeout = 60;
+constexpr uint32_t pumpTimeout = 120;
+constexpr uint32_t solenoidTimeout = 65;
 constexpr uint32_t waterBoilingTimePeriod = 500;
 // constexpr uint32_t coolDownTimePeriod = 10800;  // Home Assistant uses 3 hours
 // constexpr uint32_t coolDownTimePeriod = 8;  // testing
@@ -50,7 +50,7 @@ uint32_t getCoolingDuration() {
 
 uint32_t getRetryDuration() {
   uint32_t seconds = getHARetrySeconds();
-  return seconds >= 1 && seconds <= 3600 ? seconds : 3600;
+  return seconds >= 1 && seconds <= MAX_SLEEP_SECONDS ? seconds : MAX_SLEEP_SECONDS;
 }
 
 
@@ -163,9 +163,10 @@ void fillWater() {
   while (millis() - start < solenoidTimeout * 1000UL) {
     if (emergencyShutdownTriggered){
       Serial.println("Emergency shutdown triggered during water filling");
-      break;
+      shutdownSystem();
     }
     if (digitalRead(kettleWaterSensorPin) == LOW) {
+      delay(100);
       Serial.println("Kettle is now full");
       break;
     }
@@ -173,7 +174,17 @@ void fillWater() {
   }
   digitalWrite(solenoidPin, LOW);
   mqttDelay(250);
-  Serial.println("Water filling complete");
+  if (digitalRead(kettleWaterSensorPin) == LOW) {
+    Serial.println("Water filling complete");
+  }
+  else {
+    Serial.println("Error : Kettle is not full");
+    delay(100);
+    reportController(STATE_ASLEEP);
+    reportOperation(ERROR_WATER_FILLING);
+    sleepForSeconds(getRetryDuration());
+  }
+  
 }
 
 void boilWaterWithoutSleep() {
@@ -217,7 +228,7 @@ void runWaterBoiler() {
       decision != "READY" &&
       decision != "READY_SKIP_TRANSFER") {
 
-    reportOperation(STATE_ERROR);
+    reportOperation(ERROR_UNIDENTIFIED_RESPONSE);
     sleepForSeconds(getRetryDuration());
     return;
   }
@@ -275,7 +286,13 @@ void runWaterBoiler() {
 
   if (decision != "APPROVED") {
 
-    reportOperation(STATE_WAITING);
+    if (decision == "MAX_CYCLES_REACHED") {
+      Serial.println("Maximum cycles reached for current window.");
+      publishToMQTT(operationStatusTopic, "Maximum Cycles Reached", true);
+    } else {
+      reportOperation(STATE_WAITING);
+    }
+
     sleepForSeconds(getRetryDuration());
     return;
   }
@@ -294,7 +311,7 @@ void runWaterBoiler() {
 
     Serial.println("ERROR: Kettle filling failed. Boiling cancelled.");
 
-    reportOperation(STATE_ERROR);
+    reportOperation(ERROR_WATER_FILLING);
     sleepForSeconds(getRetryDuration());
     return;
   }
@@ -332,7 +349,7 @@ void runWaterBoiler() {
 
     Serial.println("ERROR: Cooling confirmation unavailable.");
 
-    reportOperation(STATE_ERROR);
+    reportOperation(ERROR_COOLING_CONFIRMATION_UNAVAILABLE);
     sleepForSeconds(MAX_SLEEP_SECONDS);
     return;
   }
@@ -346,7 +363,7 @@ void runWaterBoiler() {
 
     Serial.println("ERROR: Invalid cooling duration.");
 
-    reportOperation(STATE_ERROR);
+    reportOperation(ERROR_INVALID_COOLING_DURATION);
     sleepForSeconds(MAX_SLEEP_SECONDS);
     return;
   }
@@ -454,7 +471,7 @@ void setup() {
   reportController(STATE_ACTIVE);
   if (!synchronizeTime()) {
     Serial.println("Time sync failed; no heating authorized");
-    reportOperation(STATE_ERROR);
+    reportOperation(ERROR_TIME_SYNC_FAILURE);
     sleepForSeconds(getRetryDuration());
   }
   runWaterBoiler();
