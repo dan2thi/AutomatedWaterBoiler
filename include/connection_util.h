@@ -9,6 +9,7 @@ extern const char* operationStatusTopic;
 extern const char* cycleTopic;
 extern const char* requestTopic;
 extern const char* authorizationTopic;
+extern Print& RemoteLog;
 
 enum WaterSystemState {
   STATE_INITIALIZING, 
@@ -28,6 +29,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length);
 void shutdownSystem();
 void publishToMQTT(const char* topic, const char* payload, bool retain = false);
 void publishDiscovery();
+void flushRemoteLogs();
 const char* getStateName(WaterSystemState state);
 uint32_t getHACoolingSeconds();
 uint32_t getHARetrySeconds();

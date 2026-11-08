@@ -35,11 +35,11 @@ bool emergencyShutdownTriggered = false;
 Servo myServo;
 
 void reportController(WaterSystemState state) {
-  Serial.println("Reporting controller state: " + String(getStateName(state)));
+  RemoteLog.println("Reporting controller state: " + String(getStateName(state)));
   publishToMQTT(controllerStateTopic, getStateName(state), true);
 }
 void reportOperation(WaterSystemState state) {
-  Serial.println("Reporting operation state: " + String(getStateName(state)));
+  RemoteLog.println("Reporting operation state: " + String(getStateName(state)));
   publishToMQTT(operationStatusTopic, getStateName(state), true);
 }
 
@@ -62,14 +62,15 @@ void sleepForSeconds(uint32_t seconds) {
   mqttDelay(250);
   reportController(STATE_ASLEEP);
   mqttDelay(250);
-  Serial.printf("Sleeping for %lu seconds\n", (unsigned long)seconds);
+  RemoteLog.printf("Sleeping for %lu seconds\n", (unsigned long)seconds);
   Serial.flush();
+  flushRemoteLogs();
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
   esp_deep_sleep_start();
 }
 
 void shutdownSystem() {
-  Serial.println("Initiating emergency shutdown");
+  RemoteLog.println("Initiating emergency shutdown");
   delay(250);
   digitalWrite(waterPumpPin, LOW);
   delay(250);
@@ -80,6 +81,7 @@ void shutdownSystem() {
   reportController(SHUTDOWN);
   delay(250);
   Serial.flush();
+  flushRemoteLogs();
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
   esp_deep_sleep_start();
 }
@@ -114,13 +116,13 @@ void transferWaterToTank() {
   reportController(STATE_ACTIVE);
   reportOperation(STATE_TRANSFERRING);
   if (!ENABLE_ACTUATORS) {
-    Serial.println("DRY RUN: transfer attempt");
+    RemoteLog.println("DRY RUN: transfer attempt");
     mqttDelay(1000);
     return;
   }
   if (digitalRead(glassTankWaterSensorPin) == LOW) 
   {
-    Serial.println("Glass tank is already full");
+    RemoteLog.println("Glass tank is already full");
     return;
   }
   unsigned long start = millis();
@@ -128,11 +130,11 @@ void transferWaterToTank() {
   mqttDelay(250);
   while (millis() - start < pumpTimeout * 1000UL) {
     if (emergencyShutdownTriggered){
-      Serial.println("Emergency shutdown triggered during transfer");
+      RemoteLog.println("Emergency shutdown triggered during transfer");
       break;
     }
     if (digitalRead(glassTankWaterSensorPin) == LOW) {
-      Serial.println("Glass tank is now full");
+      RemoteLog.println("Glass tank is now full");
       break;
     }
     mqttDelay(100);
@@ -146,14 +148,14 @@ void fillWater() {
   reportOperation(STATE_FILLING);
   mqttDelay(250);
   if (!ENABLE_ACTUATORS) {
-    Serial.println("DRY RUN: filling kettle");
+    RemoteLog.println("DRY RUN: filling kettle");
     mqttDelay(1000);
     return;
   }
-  Serial.println("Filling kettle");
+  RemoteLog.println("Filling kettle");
   mqttDelay(250);
   if (digitalRead(kettleWaterSensorPin) == LOW) {
-    Serial.println("Kettle is already full");
+    RemoteLog.println("Kettle is already full");
     mqttDelay(250);
     return;
   }
@@ -162,12 +164,12 @@ void fillWater() {
   mqttDelay(250);
   while (millis() - start < solenoidTimeout * 1000UL) {
     if (emergencyShutdownTriggered){
-      Serial.println("Emergency shutdown triggered during water filling");
+      RemoteLog.println("Emergency shutdown triggered during water filling");
       shutdownSystem();
     }
     if (digitalRead(kettleWaterSensorPin) == LOW) {
       delay(100);
-      Serial.println("Kettle is now full");
+      RemoteLog.println("Kettle is now full");
       break;
     }
     mqttDelay(250);
@@ -175,10 +177,10 @@ void fillWater() {
   digitalWrite(solenoidPin, LOW);
   mqttDelay(250);
   if (digitalRead(kettleWaterSensorPin) == LOW) {
-    Serial.println("Water filling complete");
+    RemoteLog.println("Water filling complete");
   }
   else {
-    Serial.println("Error : Kettle is not full");
+    RemoteLog.println("Error : Kettle is not full");
     delay(100);
     reportController(STATE_ASLEEP);
     reportOperation(ERROR_WATER_FILLING);
@@ -192,11 +194,11 @@ void boilWaterWithoutSleep() {
   reportOperation(STATE_BOILING);
   mqttDelay(1000);
   if (!ENABLE_ACTUATORS) {
-    Serial.println("DRY RUN: boiling kettle");
+    RemoteLog.println("DRY RUN: boiling kettle");
     mqttDelay(waterBoilingTimePeriod * 1000UL);
     return;
   }
-  Serial.println("Boiling water in the kettle");
+  RemoteLog.println("Boiling water in the kettle");
   delay(250);
   myServo.write(170);
   mqttDelay(1000);
@@ -204,7 +206,7 @@ void boilWaterWithoutSleep() {
   mqttDelay(waterBoilingTimePeriod * 1000UL);
   
   myServo.write(0);
-  Serial.println("Boiling complete, kettle switched-off");
+  RemoteLog.println("Boiling complete, kettle switched-off");
   mqttDelay(1000);
 }
 
@@ -213,7 +215,7 @@ void runWaterBoiler() {
 
   String decision = requestHA("wake");
   delay(250);
-  Serial.printf("Response for {wake} request: %s\n", decision.c_str());
+  RemoteLog.printf("Response for {wake} request: %s\n", decision.c_str());
   delay(250);
 
   // Cooling is not complete. Do not transfer water.
@@ -236,7 +238,7 @@ void runWaterBoiler() {
   // Transfer water ONLY when HA explicitly authorizes it.
   if (decision == "TRANSFER") {
 
-    Serial.println("HA authorized water transfer.");
+    RemoteLog.println("HA authorized water transfer.");
 
     transferWaterToTank();
     delay(250);
@@ -244,7 +246,7 @@ void runWaterBoiler() {
     // Notify Home Assistant that transfer has finished.
     decision = requestHA("transfer_done");
 
-    Serial.printf("Response for {transfer_done} request: %s\n",
+    RemoteLog.printf("Response for {transfer_done} request: %s\n",
                   decision.c_str());
 
     if (decision != "READY") {
@@ -256,7 +258,7 @@ void runWaterBoiler() {
   } else if (decision == "READY" ||
              decision == "READY_SKIP_TRANSFER") {
 
-    Serial.println("No pending transfer. Skipping water pump.");
+    RemoteLog.println("No pending transfer. Skipping water pump.");
   }
 
   // Check whether the glass storage tank is full.
@@ -265,7 +267,7 @@ void runWaterBoiler() {
 
   if (ENABLE_ACTUATORS && glassTankFull == LOW) {
 
-    Serial.println("Glass tank is full");
+    RemoteLog.println("Glass tank is full");
     delay(250);
 
     reportOperation(STATE_TANK_FULL);
@@ -280,14 +282,14 @@ void runWaterBoiler() {
   decision = requestHA("cycle");
   delay(250);
 
-  Serial.printf("Response for {cycle} request: %s\n",
+  RemoteLog.printf("Response for {cycle} request: %s\n",
                 decision.c_str());
   delay(250);
 
   if (decision != "APPROVED") {
 
     if (decision == "MAX_CYCLES_REACHED") {
-      Serial.println("Maximum cycles reached for current window.");
+      RemoteLog.println("Maximum cycles reached for current window.");
       publishToMQTT(operationStatusTopic, "Maximum Cycles Reached", true);
     } else {
       reportOperation(STATE_WAITING);
@@ -309,7 +311,7 @@ void runWaterBoiler() {
   if (ENABLE_ACTUATORS &&
       digitalRead(kettleWaterSensorPin) != LOW) {
 
-    Serial.println("ERROR: Kettle filling failed. Boiling cancelled.");
+    RemoteLog.println("ERROR: Kettle filling failed. Boiling cancelled.");
 
     reportOperation(ERROR_WATER_FILLING);
     sleepForSeconds(getRetryDuration());
@@ -326,7 +328,7 @@ void runWaterBoiler() {
       (uint32_t)nowEpoch >= expiresAt ||
       ((uint64_t)nowEpoch + waterBoilingTimePeriod + 5ULL) >= closesAt) {
 
-    Serial.println("Boiling permission expired / insufficient off-peak time");
+    RemoteLog.println("Boiling permission expired / insufficient off-peak time");
 
     reportOperation(STATE_ERROR);
     sleepForSeconds(getRetryDuration());
@@ -342,12 +344,12 @@ void runWaterBoiler() {
   // Notify Home Assistant that boiling has finished.
   decision = requestHA("boil_finished", cycleRequestID);
 
-  Serial.printf("Cooling response: %s\n", decision.c_str());
+  RemoteLog.printf("Cooling response: %s\n", decision.c_str());
 
   // Home Assistant must confirm the cooling period.
   if (decision != "COOLING") {
 
-    Serial.println("ERROR: Cooling confirmation unavailable.");
+    RemoteLog.println("ERROR: Cooling confirmation unavailable.");
 
     reportOperation(ERROR_COOLING_CONFIRMATION_UNAVAILABLE);
     sleepForSeconds(MAX_SLEEP_SECONDS);
@@ -361,107 +363,18 @@ void runWaterBoiler() {
 
   if (coolingSeconds == 0) {
 
-    Serial.println("ERROR: Invalid cooling duration.");
+    RemoteLog.println("ERROR: Invalid cooling duration.");
 
     reportOperation(ERROR_INVALID_COOLING_DURATION);
     sleepForSeconds(MAX_SLEEP_SECONDS);
     return;
   }
 
-  Serial.printf("Cooling for %lu seconds\n",
+  RemoteLog.printf("Cooling for %lu seconds\n",
                 (unsigned long)coolingSeconds);
 
   sleepForSeconds(coolingSeconds);
 }
-
-
-// void runWaterBoiler() {
-//   String decision = requestHA("wake");
-//   delay(250);
-//   Serial.printf("Response for {wake} request: %s\n", decision.c_str());
-//   delay(250);
-//   if (decision == "WAIT") {
-//     reportOperation(STATE_COOLING);
-//     sleepForSeconds(getRetryDuration());
-//   }
-//   if (decision != "TRANSFER" &&
-//       decision != "READY" &&
-//       decision != "READY_SKIP_TRANSFER") {
-//     reportOperation(STATE_ERROR);
-//     sleepForSeconds(getRetryDuration());
-//   }
-//   // Skip transfer if HA confirms it was already completed
-//   if (decision == "READY_SKIP_TRANSFER") {
-//     Serial.println("Final transfer already completed. Skipping.");
-//   } else {
-//     transferWaterToTank();
-//     delay(250);
-//   }
-//   if (decision == "TRANSFER") {
-//     decision = requestHA("transfer_done");
-//     Serial.printf("Response for {transfer_done request}: %s\n", decision.c_str());
-//     if (decision != "READY") {
-//       reportOperation(STATE_ERROR);
-//       sleepForSeconds(getRetryDuration());
-//     }
-//   }
-//   bool glassTankFull = digitalRead(glassTankWaterSensorPin);
-//   delay(250);
-//   if (ENABLE_ACTUATORS && glassTankFull == LOW) {
-//     delay(250);
-//     Serial.println("Glass tank is full");
-//     delay(250);
-//     reportOperation(STATE_TANK_FULL);
-//     delay(250);
-//     sleepForSeconds(getRetryDuration());
-//   }
-//   delay(250);
-//   decision = requestHA("cycle");
-//   delay(250);
-//   Serial.printf("Response for {cycle} request: %s\n", decision.c_str());
-//   delay(250);
-//   if (decision != "APPROVED") {
-//     reportOperation(STATE_WAITING);
-//     sleepForSeconds(getRetryDuration());
-//   }
-//   const String cycleRequestID = lastRequestID();
-//   const uint32_t expiresAt = lastAuthorizationExpiry();
-//   const uint32_t closesAt = lastWindowEnd();
-
-
-//   fillWater();
-//   // if (!fillWater()) {
-//   //   reportOperation(STATE_ERROR);
-//   //   sleepForSeconds(retrySleepSeconds);
-//   // }
-
-//   // An approval is single-use and short-lived; check immediately before boiling.
-//   time_t nowEpoch = time(nullptr);
-//   if (nowEpoch < 1700000000 || expiresAt == 0 || closesAt == 0 ||
-//       (uint32_t)nowEpoch >= expiresAt ||
-//       ((uint64_t)nowEpoch + waterBoilingTimePeriod + 5ULL) >= closesAt) {
-//     Serial.println("Boiling permission expired / insufficient off-peak time");
-//     reportOperation(STATE_ERROR);
-//     sleepForSeconds(getRetryDuration());
-//   }
-
-//   boilWaterWithoutSleep(); // Always returns with kettle switch-off command sent.
-//   reportOperation(STATE_COOLING);
-
-//   decision = requestHA("boil_finished", cycleRequestID);
-//   Serial.printf("Cooling response: %s\n", decision.c_str());
-//   // Fail safely if HA unavailable. HA must NOT infer an actual switch-off
-//   // time from the original authorization timestamp.
-//   if (decision != "COOLING") reportOperation(STATE_ERROR);
-//   else reportOperation(STATE_COOLING);
-//   uint32_t coolingSeconds = getCoolingDuration();
-//   if (coolingSeconds == 0) {
-//     reportOperation(STATE_ERROR);
-//     sleepForSeconds(MAX_SLEEP_SECONDS);
-//   }
-
-//   sleepForSeconds(coolingSeconds);
-// }
 
 void setup() {
   initEsp32();
@@ -470,7 +383,7 @@ void setup() {
   publishDiscovery();
   reportController(STATE_ACTIVE);
   if (!synchronizeTime()) {
-    Serial.println("Time sync failed; no heating authorized");
+    RemoteLog.println("Time sync failed; no heating authorized");
     reportOperation(ERROR_TIME_SYNC_FAILURE);
     sleepForSeconds(getRetryDuration());
   }

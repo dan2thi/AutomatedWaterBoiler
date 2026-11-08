@@ -60,8 +60,11 @@ void publishToMQTT(const char* topic, const char* message, bool retain) {
 void mqttDelay(unsigned long duration) {
   unsigned long start = millis();
   while (millis() - start < duration) {
-    if (mqttClient.connected()) mqttClient.loop();
-    delay(10);
+    if (mqttClient.connected()) {
+      mqttClient.loop();
+      flushRemoteLogs();
+    }
+    delay(50);
   }
 }
 
@@ -99,10 +102,10 @@ void connectMQTT() {
     esp_sleep_enable_timer_wakeup(3 * 1000000ULL);
     esp_deep_sleep_start();
   }
-  Serial.println("MQTT connected");
-  Serial.println("Subscribing to MQTT topics...");
+  RemoteLog.println("MQTT connected");
+  RemoteLog.println("Subscribing to MQTT topics...");
   if (!mqttClient.subscribe(authorizationTopic) || !mqttClient.subscribe(bedSideLeakTopic)) {
-    Serial.println("MQTT subscription failed; sleeping for 3 seconds");
+    RemoteLog.println("MQTT subscription failed; sleeping for 3 seconds");
     esp_sleep_enable_timer_wakeup(3 * 1000000ULL);
     esp_deep_sleep_start();
   }
@@ -113,7 +116,7 @@ void connectMQTT() {
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(topic, bedSideLeakTopic) == 0) {
     if (length == 2 && payload[0] == 'O' && payload[1] == 'N') {
-      Serial.println("Water leak detected");
+      RemoteLog.println("Water leak detected");
       delay(250);
       publishToMQTT(operationStatusTopic, getStateName(LEAK_DETECTED), true);
       delay(250);
@@ -191,7 +194,7 @@ void publishDiscovery() {
   publishToMQTT("homeassistant/sensor/waterboiler_cycles_counter/config", config, true);
   // Do not clear retained states or the HA-owned cycle counter here.
   mqttDelay(300);
-  Serial.println("Published Home Assistant discovery messages");
+  RemoteLog.println("Published Home Assistant discovery messages");
 }
 
 uint32_t getHACoolingSeconds() {
@@ -200,4 +203,65 @@ uint32_t getHACoolingSeconds() {
 
 uint32_t getHARetrySeconds() {
   return haRetrySeconds;
+}
+
+
+class MqttLogPrinter : public Print {
+private:
+  static constexpr size_t LINE_SIZE = 240;
+  static constexpr uint8_t CAPACITY = 16;
+  char current[LINE_SIZE] = {};
+  size_t position = 0;
+  char pending[CAPACITY][LINE_SIZE] = {};
+  uint8_t head = 0;
+  uint8_t count = 0;
+
+  void queueLine() {
+    if (position == 0) return;
+    current[position] = '\0';
+    if (count == CAPACITY) {
+      head = (head + 1) % CAPACITY;
+      count--;
+    }
+    uint8_t slot = (head + count) % CAPACITY;
+    memcpy(pending[slot], current, position + 1);
+    count++;
+    position = 0;
+  }
+
+public:
+  using Print::write;
+  size_t write(uint8_t character) override {
+    Serial.write(character);
+    if (character == '\n') {
+      queueLine();
+    } else if (character != '\r') {
+      if (position >= LINE_SIZE - 1) {
+        queueLine();
+      }
+      current[position++] = (char)character;
+    }
+    return 1;
+  }
+
+  void sendPending() {
+    if (!mqttClient.connected()) return;
+    while (count > 0) {
+      if (!mqttClient.publish(
+            "waterboiler/log",
+            pending[head],
+            false)) {
+        break;
+      }
+      head = (head + 1) % CAPACITY;
+      count--;
+    }
+  }
+};
+
+static MqttLogPrinter logPrinter;
+Print& RemoteLog = logPrinter;
+
+void flushRemoteLogs() {
+  logPrinter.sendPending();
 }
